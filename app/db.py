@@ -41,8 +41,14 @@ class Entity():
         self.created_by     = ''
 
         if user_id:
+            self.user_entity_id = user_id
+            if type(self.user_entity_id) is not list:
+                self.user_entity_id = [self.user_entity_id]
+
+            self.user_id = self.db.get('SELECT u.id FROM entity e LEFT JOIN property p ON p.entity_id = e.id LEFT JOIN `user` u ON u.email = p.value_string WHERE p.property_definition_keyname = \'person-user\' AND e.id = %s AND u.id IS NOT NULL LIMIT 1', user_id).id
             if type(self.user_id) is not list:
                 self.user_id = [self.user_id]
+
             self.created_by = ','.join(map(str, self.user_id))
 
         # logging.debug({'user':self.user_id, 'created':self.created_by})
@@ -520,8 +526,8 @@ class Entity():
                 entity_definition_keyname = [entity_definition_keyname]
             sql += ' AND entity.entity_definition_keyname IN (%s)' % ','.join(['\'%s\'' % x for x in map(str, entity_definition_keyname)])
 
-        if self.user_id and only_public == False:
-            sql += ' AND relationship.related_entity_id IN (%s) AND relationship.relationship_definition_keyname IN (\'leecher\', \'viewer\', \'editor\', \'owner\')' % ','.join(map(str, self.user_id))
+        if self.user_entity_id and only_public == False:
+            sql += ' AND relationship.related_entity_id IN (%s) AND relationship.relationship_definition_keyname IN (\'leecher\', \'viewer\', \'editor\', \'owner\')' % ','.join(map(str, self.user_entity_id))
         else:
             sql += ' AND entity.public = 1 AND property_definition.public = 1'
 
@@ -580,6 +586,8 @@ class Entity():
                     entity_definition.%(language)s_description      AS entity_description,
                     entity.created                                  AS entity_created,
                     entity.changed                                  AS entity_changed,
+                    cr_eu.name                                      AS entity_created_by,
+                    ch_eu.name                                      AS entity_changed_by,
                     entity.public                                   AS entity_public,
                     entity_definition.%(language)s_displayname      AS entity_displayname,
                     entity_definition.%(language)s_displayinfo      AS entity_displayinfo,
@@ -601,6 +609,8 @@ class Entity():
                     property_definition.public                      AS property_public,
                     property.id                                     AS value_id,
                     property.id                                     AS value_ordinal,
+                    property.created                                AS property_created,
+                    cr_pu.name                                      AS property_created_by,
                     property.value_formula                          AS value_formula,
                     property.value_string                           AS value_string,
                     property.value_text                             AS value_text,
@@ -616,12 +626,18 @@ class Entity():
                     entity,
                     entity_definition,
                     property,
-                    property_definition
-                WHERE property.entity_id = entity.id
+                    property_definition,
+                    user AS cr_eu,
+                    user AS ch_eu,
+                    user AS cr_pu
+               WHERE property.entity_id = entity.id
                 AND entity_definition.keyname = entity.entity_definition_keyname
                 AND property_definition.keyname = property.property_definition_keyname
                 AND entity_definition.keyname = property_definition.entity_definition_keyname
                 AND (property.language = '%(language)s' OR property.language IS NULL)
+                AND cr_eu.id = ifnull(entity.created_by,0)
+                AND ch_eu.id = ifnull(entity.changed_by,0)
+                AND cr_pu.id = ifnull(property.created_by,0)
                 AND entity.id IN (%(idlist)s)
                 AND entity.deleted IS NULL
                 AND property.deleted IS NULL
@@ -631,7 +647,7 @@ class Entity():
                     entity_definition.keyname,
                     entity.created DESC
             """ % {'language': self.language, 'public': public, 'idlist': ','.join(map(str, entity_id)), 'datapropertysql': datapropertysql}
-            # logging.debug(sql)
+            logging.debug(sql)
 
             items = {}
             for row in self.db.query(sql):
@@ -645,6 +661,8 @@ class Entity():
                 items.setdefault('item_%s' % row.entity_id, {})['sort_value'] = row.entity_sort_value
                 items.setdefault('item_%s' % row.entity_id, {})['created'] = row.entity_created
                 items.setdefault('item_%s' % row.entity_id, {})['changed'] = row.entity_changed
+                items.setdefault('item_%s' % row.entity_id, {})['created_by'] = row.entity_created_by
+                items.setdefault('item_%s' % row.entity_id, {})['changed_by'] = row.entity_changed_by
                 items.setdefault('item_%s' % row.entity_id, {})['displayname'] = row.entity_displayname
                 items.setdefault('item_%s' % row.entity_id, {})['displayinfo'] = row.entity_displayinfo
                 items.setdefault('item_%s' % row.entity_id, {})['displaytable'] = row.entity_displaytable
@@ -666,6 +684,8 @@ class Entity():
                 items.setdefault('item_%s' % row.entity_id, {}).setdefault('properties', {}).setdefault('%s' % row.property_dataproperty, {})['formula'] = True if row.property_formula == 1 else False
                 items.setdefault('item_%s' % row.entity_id, {}).setdefault('properties', {}).setdefault('%s' % row.property_dataproperty, {})['executable'] = True if row.property_executable == 1 else False
                 items.setdefault('item_%s' % row.entity_id, {}).setdefault('properties', {}).setdefault('%s' % row.property_dataproperty, {})['public'] = True if row.property_public == 1 else False
+                items.setdefault('item_%s' % row.entity_id, {}).setdefault('properties', {}).setdefault('%s' % row.property_dataproperty, {})['created'] = row.property_created
+                items.setdefault('item_%s' % row.entity_id, {}).setdefault('properties', {}).setdefault('%s' % row.property_dataproperty, {})['created_by'] = row.property_created_by
 
                 #Value
                 if row.property_datatype in ['string', 'select']:
@@ -942,8 +962,8 @@ class Entity():
         if related_entity_id:
             sql += ' AND r.related_entity_id IN (%s)' % ','.join(map(str, related_entity_id))
 
-        if self.user_id and only_public == False:
-            sql += ' AND rights.related_entity_id IN (%s) AND rights.relationship_definition_keyname IN (\'leecher\', \'viewer\', \'editor\', \'owner\')' % ','.join(map(str, self.user_id))
+        if self.user_entity_id and only_public == False:
+            sql += ' AND rights.related_entity_id IN (%s) AND rights.relationship_definition_keyname IN (\'leecher\', \'viewer\', \'editor\', \'owner\')' % ','.join(map(str, self.user_entity_id))
         else:
             sql += ' AND e.public = 1'
 
@@ -1135,13 +1155,13 @@ class Entity():
             AND relationship.entity_id = entity.id
             AND relationship.relationship_definition_keyname IN ('viewer', 'editor', 'owner')
             AND entity_definition.estonian_menu IS NOT NULL
-            AND relationship.related_entity_id IN (%(user_id)s)
+            AND relationship.related_entity_id IN (%(user_entity_id)s)
             AND entity.deleted IS NULL
             AND relationship.deleted IS NULL
             ORDER BY
                 entity_definition.estonian_menu,
                 entity_definition.estonian_label;
-        """ % {'language': self.language, 'user_id': ','.join(map(str, self.user_id))}
+        """ % {'language': self.language, 'user_entity_id': ','.join(map(str, self.user_entity_id))}
         # logging.debug(sql)
 
         menu = {}

@@ -65,7 +65,7 @@
                     <h6>{{ _('created') }}</h6>
                 </th>
                 <td style="width:100%; vertical-align:middle;">
-                    {{ entity.get('created', '') }}
+                    {{ entity.get('created', '') }}: {{ entity.get('created_by', '') }}
                 </td>
             </tr>
         </tbody>
